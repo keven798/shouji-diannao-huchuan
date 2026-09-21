@@ -1,0 +1,19 @@
+{
+  "name": "phone-pc-transfer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "手机↔电脑局域网互传工具：手机批量传图（保序）+ 电脑端 ZIP 打包批量下载 + 命名模板批量重命名",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "qrcode": "^1.5.4"
+  }
+}

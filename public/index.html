@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>手机传图 · 局域网互传</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --border: #e2e4e8;
+    --text: #1f2328; --text-2: #5f6368; --text-3: #9aa0a6;
+    --primary: #1a73e8; --primary-dark: #1558b0; --danger: #d93025;
+    --ok: #188038; --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: var(--bg); color: var(--text); }
+  body { font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+  .num { font-variant-numeric: tabular-nums; font-family: var(--mono); }
+
+  .topbar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: var(--panel); border-bottom: 1px solid var(--border); }
+  .topbar .brand { font-size: 16px; font-weight: 600; }
+  .topbar .hint { font-size: 12px; color: var(--text-2); }
+  .topbar .hint a { color: var(--primary); text-decoration: none; }
+
+  .wrap { max-width: 640px; margin: 0 auto; padding: 12px 12px 40px; display: flex; flex-direction: column; gap: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .panel-head h2 { font-size: 14px; font-weight: 600; color: var(--text); }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .row:last-child { margin-bottom: 0; }
+  .lbl { font-size: 13px; color: var(--text-2); flex: none; }
+
+  input[type="text"] { flex: 1; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--border);
+    border-radius: 6px; font-size: 14px; background: #fff; color: var(--text); }
+  input[type="text"]:focus { outline: none; border-color: var(--primary); }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 34px; padding: 0 14px;
+    border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text);
+    font-size: 13px; cursor: pointer; user-select: none; }
+  .btn:active { background: #f0f1f3; }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn-primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn-primary:active { background: var(--primary-dark); }
+  .btn-primary:disabled { background: var(--primary); }
+  .btn-lg { width: 100%; height: 42px; font-size: 15px; font-weight: 600; }
+  .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; }
+  .btn-ghost-danger { color: var(--danger); border-color: #f3c6c2; }
+
+  .meta { font-size: 12px; color: var(--text-2); }
+
+  /* 缩略图网格（顺序 = 选择顺序） */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(88px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .thumb { position: relative; aspect-ratio: 1; border: 1px solid var(--border); border-radius: 6px;
+    overflow: hidden; background: #fafafa; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+  .thumb .seq { position: absolute; top: 4px; left: 4px; min-width: 22px; height: 22px; padding: 0 5px;
+    display: flex; align-items: center; justify-content: center; background: var(--primary); color: #fff;
+    border-radius: 11px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; cursor: grab; }
+  .thumb.dragging { opacity: .45; outline: 2px dashed var(--primary); }
+  .thumb.drop-target { outline: 2px solid var(--primary); }
+  .thumb .tname { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 4px;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .progress { height: 8px; background: #eceff1; border-radius: 4px; overflow: hidden; margin: 6px 0 8px; }
+  .progress .bar { height: 100%; width: 0; background: var(--primary); transition: width .15s; border-radius: 4px; }
+  .progress-label { font-size: 12px; color: var(--text-2); font-variant-numeric: tabular-nums; margin-bottom: 8px; }
+
+  .result { margin-top: 8px; padding: 8px 10px; border-radius: 6px; font-size: 13px; display: none; }
+  .result.ok { display: block; background: #e6f4ea; color: var(--ok); border: 1px solid #ceead6; }
+  .result.err { display: block; background: #fce8e6; color: var(--danger); border: 1px solid #f5c6c0; }
+  .result .code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  .divider { text-align: center; font-size: 12px; color: var(--text-3); margin: 2px 0; }
+
+  /* 电脑传来的文件 */
+  .pc-sess { border-top: 1px solid var(--border); padding: 10px 0; }
+  .pc-sess:first-child { border-top: none; padding-top: 0; }
+  .pc-sess-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .pc-sess-head .name { font-size: 13px; font-weight: 600; word-break: break-all; }
+  .pc-sess-head .info { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+  .pc-files { margin-top: 6px; }
+  .pc-file { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .pc-file .fname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pc-file a { color: var(--primary); text-decoration: none; flex: none; }
+  .pc-file .fsize { color: var(--text-3); font-variant-numeric: tabular-nums; flex: none; }
+  .empty { text-align: center; color: var(--text-3); font-size: 12px; padding: 16px 0; }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">手机传图</div>
+  <div class="hint">局域网互传 · <a href="/pc">电脑端入口 →</a></div>
+</header>
+
+<main class="wrap">
+  <section class="panel">
+    <div class="row">
+      <label class="lbl" for="sessionName">批次名</label>
+      <input id="sessionName" type="text" maxlength="60" placeholder="手机传图-MMDD-HHmm" autocomplete="off">
+    </div>
+
+    <div class="row">
+      <label class="btn btn-primary" for="fileInput">＋ 从相册选图（可多选）</label>
+      <input id="fileInput" type="file" multiple accept="image/*" hidden>
+      <span class="meta" id="pickMeta">未选择</span>
+    </div>
+
+    <div id="grid" class="grid" hidden></div>
+
+    <div class="row" id="gridActions" hidden>
+      <button class="btn btn-sm" id="btnReverse" type="button">⇅ 反序</button>
+      <button class="btn btn-sm btn-ghost-danger" id="btnClear" type="button">清空</button>
+      <span class="meta">按选择顺序编号 · 拖动序号徽标可调序</span>
+    </div>
+
+    <div class="row">
+      <button class="btn btn-primary btn-lg" id="btnUpload" type="button" disabled>开始上传</button>
+    </div>
+    <div class="progress" id="progressWrap" hidden><div class="bar" id="progressBar"></div></div>
+    <div class="progress-label num" id="progressLabel" hidden></div>
+    <div class="result" id="result"></div>
+  </section>
+
+  <div class="divider">— 电脑传来的文件 —</div>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>电脑 → 手机</h2>
+      <button class="btn btn-sm" id="btnRefreshPc" type="button">刷新</button>
+    </div>
+    <div id="pcSessions"><div class="empty">加载中…</div></div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (id) { return document.getElementById(id); };
+  var picked = [];        // File 对象数组，顺序即上传顺序
+  var objUrls = [];       // 预览用 object URL，重渲染前统一回收
+
+  function pad2(n) { return String(n).padStart(2, '0'); }
+  function defaultBatchName() {
+    var d = new Date();
+    return '手机传图-' + pad2(d.getMonth() + 1) + pad2(d.getDate()) + '-' + pad2(d.getHours()) + pad2(d.getMinutes());
+  }
+  function fmtSize(n) {
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(2) + ' GB';
+  }
+  function fmtTime(iso) {
+    var d = new Date(iso);
+    return pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + ' ' + pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  $('sessionName').value = defaultBatchName();
+
+  /* ---------------- 选图与排序 ---------------- */
+
+  $('fileInput').addEventListener('change', function (e) {
+    picked = Array.prototype.slice.call(e.target.files || []);
+    renderGrid();
+  });
+
+  function revokeUrls() {
+    objUrls.forEach(function (u) { URL.revokeObjectURL(u); });
+    objUrls = [];
+  }
+
+  function moveItem(from, to) {
+    if (from === to || from < 0 || to < 0 || from >= picked.length || to >= picked.length) return;
+    var item = picked.splice(from, 1)[0];
+    picked.splice(to, 0, item);
+    renderGrid();
+  }
+
+  function renderGrid() {
+    revokeUrls();
+    var grid = $('grid');
+    grid.hidden = picked.length === 0;
+    $('gridActions').hidden = grid.hidden;
+    $('btnUpload').disabled = picked.length === 0;
+    var total = picked.reduce(function (s, f) { return s + f.size; }, 0);
+    $('pickMeta').textContent = picked.length ? ('已选 ' + picked.length + ' 张 · 共 ' + fmtSize(total)) : '未选择';
+    grid.innerHTML = '';
+    picked.forEach(function (f, i) {
+      var url = URL.createObjectURL(f);
+      objUrls.push(url);
+      var div = document.createElement('div');
+      div.className = 'thumb';
+      div.draggable = true;
+      div.dataset.index = String(i);
+      div.innerHTML = '<img alt="" loading="lazy">' +
+        '<span class="seq num" data-handle="1">' + (i + 1) + '</span>' +
+        '<span class="tname"></span>';
+      div.querySelector('img').src = url;
+      div.querySelector('.tname').textContent = f.name;
+      bindDrag(div, i);
+      bindTouch(div.querySelector('.seq'), i);
+      grid.appendChild(div);
+    });
+  }
+
+  /* 桌面端 HTML5 拖拽调序 */
+  function bindDrag(div, index) {
+    div.addEventListener('dragstart', function (e) {
+      e.dataTransfer.setData('text/plain', String(index));
+      e.dataTransfer.effectAllowed = 'move';
+      div.classList.add('dragging');
+    });
+    div.addEventListener('dragend', function () { div.classList.remove('dragging'); });
+    div.addEventListener('dragover', function (e) {
+      e.preventDefault();
+      div.classList.add('drop-target');
+    });
+    div.addEventListener('dragleave', function () { div.classList.remove('drop-target'); });
+    div.addEventListener('drop', function (e) {
+      e.preventDefault();
+      div.classList.remove('drop-target');
+      var from = parseInt(e.dataTransfer.getData('text/plain'), 10);
+      moveItem(isNaN(from) ? -1 : from, index);
+    });
+  }
+
+  /* 移动端：按住序号徽标拖动，松手落位 */
+  function bindTouch(handle, index) {
+    var curIndex = index;
+    handle.addEventListener('touchstart', function (e) {
+      curIndex = index;
+      e.preventDefault();
+    }, { passive: false });
+    handle.addEventListener('touchmove', function (e) {
+      e.preventDefault();
+      var t = e.touches[0];
+      var el = document.elementFromPoint(t.clientX, t.clientY);
+      var thumb = el && el.closest ? el.closest('.thumb') : null;
+      if (thumb && thumb.dataset.index !== undefined) {
+        curIndex = parseInt(thumb.dataset.index, 10);
+        Array.prototype.forEach.call(document.querySelectorAll('.thumb'), function (n) {
+          n.classList.remove('drop-target');
+        });
+        thumb.classList.add('drop-target');
+      }
+    }, { passive: false });
+    handle.addEventListener('touchend', function (e) {
+      e.preventDefault();
+      Array.prototype.forEach.call(document.querySelectorAll('.thumb'), function (n) {
+        n.classList.remove('drop-target');
+      });
+      moveItem(index, curIndex);
+    }, { passive: false });
+  }
+
+  $('btnReverse').addEventListener('click', function () {
+    picked.reverse();
+    renderGrid();
+  });
+  $('btnClear').addEventListener('click', function () {
+    picked = [];
+    $('fileInput').value = '';
+    renderGrid();
+  });
+
+  /* ---------------- XHR 带进度上传 ---------------- */
+
+  function showResult(cls, html) {
+    var el = $('result');
+    el.className = 'result ' + cls;
+    el.innerHTML = html;
+  }
+
+  $('btnUpload').addEventListener('click', function () {
+    if (picked.length === 0) return;
+    var fd = new FormData();
+    fd.append('sessionName', $('sessionName').value.trim() || defaultBatchName());
+    fd.append('direction', 'phone');
+    picked.forEach(function (f) { fd.append('files', f, f.name); }); // append 顺序即上传顺序
+
+    var xhr = new XMLHttpRequest();
+    $('btnUpload').disabled = true;
+    $('progressWrap').hidden = false;
+    $('progressLabel').hidden = false;
+
+    xhr.upload.addEventListener('progress', function (e) {
+      if (!e.lengthComputable) return;
+      var pct = Math.round(e.loaded / e.total * 100);
+      $('progressBar').style.width = pct + '%';
+      $('progressLabel').textContent = '上传中 ' + pct + '% · ' + fmtSize(e.loaded) + ' / ' + fmtSize(e.total);
+    });
+    xhr.addEventListener('load', function () {
+      var data = null;
+      try { data = JSON.parse(xhr.responseText); } catch (_) { /* 非法响应体 */ }
+      if (xhr.status === 200 && data) {
+        showResult('ok', '✅ 上传成功：<span class="code">' + data.count + '</span> 个文件已进入批次「' +
+          data.name + '」（批次ID <span class="code">' + data.sessionId + '</span>）。到电脑端打开 <a href="/pc">/pc</a> 下载 ZIP。');
+        picked = [];
+        $('fileInput').value = '';
+        renderGrid();
+      } else {
+        showResult('err', '❌ 上传失败：' + ((data && data.error) || ('HTTP ' + xhr.status)));
+      }
+      finishProgress();
+    });
+    xhr.addEventListener('error', function () {
+      showResult('err', '❌ 网络错误，请确认与电脑在同一局域网');
+      finishProgress();
+    });
+    xhr.addEventListener('abort', function () {
+      showResult('err', '❌ 上传已取消');
+      finishProgress();
+    });
+
+    xhr.open('POST', '/api/upload');
+    xhr.send(fd);
+  });
+
+  function finishProgress() {
+    $('btnUpload').disabled = picked.length === 0;
+    setTimeout(function () {
+      $('progressWrap').hidden = true;
+      $('progressLabel').hidden = true;
+      $('progressBar').style.width = '0';
+    }, 1200);
+  }
+
+  /* ---------------- 电脑传来的文件 ---------------- */
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  async function loadPcSessions() {
+    var box = $('pcSessions');
+    try {
+      var res = await fetch('/api/sessions');
+      var list = await res.json();
+      var pcList = list.filter(function (s) { return s.direction === 'pc'; });
+      if (pcList.length === 0) {
+        box.innerHTML = '<div class="empty">暂无电脑传来的文件，请在电脑端 /pc 页面上传</div>';
+        return;
+      }
+      box.innerHTML = '';
+      pcList.forEach(function (s) {
+        var sess = document.createElement('div');
+        sess.className = 'pc-sess';
+        var head = document.createElement('div');
+        head.className = 'pc-sess-head';
+        head.innerHTML = '<div><div class="name">' + esc(s.name) + '</div>' +
+          '<div class="info num">' + fmtTime(s.createdAt) + ' · ' + s.fileCount + ' 个文件 · ' + fmtSize(s.totalSize) + '</div></div>' +
+          '<a class="btn btn-sm btn-primary" href="/api/download/' + encodeURIComponent(s.id) + '">打包 ZIP</a>';
+        sess.appendChild(head);
+        var filesBox = document.createElement('div');
+        filesBox.className = 'pc-files';
+        s.files.forEach(function (f) {
+          var row = document.createElement('div');
+          row.className = 'pc-file';
+          row.innerHTML = '<span class="num" style="color:var(--text-3)">' + f.seq + '</span>' +
+            '<span class="fname">' + esc(f.origName) + '</span>' +
+            '<span class="fsize">' + fmtSize(f.size) + '</span>' +
+            '<a href="/api/file/' + encodeURIComponent(s.id) + '/' + f.seq + '">下载</a>';
+          filesBox.appendChild(row);
+        });
+        sess.appendChild(filesBox);
+        box.appendChild(sess);
+      });
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message) + '</div>';
+    }
+  }
+
+  $('btnRefreshPc').addEventListener('click', loadPcSessions);
+  loadPcSessions();
+})();
+</script>
+</body>
+</html>

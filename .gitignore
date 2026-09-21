@@ -1,2 +1,5 @@
 # WorkBuddy 项目数据不上传
 .workbuddy/
+# 依赖与运行数据
+node_modules/
+data/
