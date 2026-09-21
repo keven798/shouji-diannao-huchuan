@@ -7,6 +7,9 @@
  *   GET  /api/sessions/:id    会话详情（文件按上传顺序 seq 排序）
  *   GET  /api/file/:id/:seq   单文件流（默认 attachment 下载；?inline=1 内联预览，供缩略图）
  *   GET  /api/download/:id    整批打包 ZIP（?template= 命名模板，ZIP 内按模板重命名）
+ *   POST /api/download/:id    同上 + Excel 映射：body {template, names:{"序号":"名称"}}
+ *   GET  /api/info            自动检测的局域网访问地址
+ *   GET  /api/qr              二维码 SVG（?text= 自定义，默认手机端地址）
  *
  * 运行：node server.js   监听 0.0.0.0:5210，启动时打印局域网访问地址与二维码
  */
@@ -332,8 +335,11 @@ app.get('/api/file/:id/:seq', async (req, res, next) => {
   }
 });
 
-// 整批打包 ZIP 下载（按命名模板重命名）
-app.get('/api/download/:id', async (req, res, next) => {
+// 整批打包 ZIP 下载（按命名模板重命名；POST 支持 Excel 序号→名称映射）
+//   GET  /api/download/:id?template=...          纯模板命名
+//   POST /api/download/:id  body:{template,names} names 为 { "序号": "名称" } 映射，
+//        命中映射的文件按 Excel 名称命名（自动补扩展名），未命中的回退模板
+async function buildZipDownload(req, res, next, template, nameMap) {
   try {
     const manifest = await findSession(req.params.id);
     if (!manifest) return res.status(404).json({ error: '会话不存在' });
@@ -342,20 +348,33 @@ app.get('/api/download/:id', async (req, res, next) => {
     const created = new Date(manifest.createdAt);
     const event = sanitizeName(manifest.name) || '未命名批次';
     const dedupe = makeDedupe();
+    const map = (nameMap && typeof nameMap === 'object') ? nameMap : {};
 
     const named = manifest.files.map(f => {
-      const ext = (path.extname(f.origName) || '').toLowerCase();
+      const dot = f.origName.lastIndexOf('.');
+      const ext = (dot >= 0 ? f.origName.slice(dot) : '').toLowerCase();
+      const stem = dot >= 0 ? f.origName.slice(0, dot) : f.origName;
       const ctx = {
         seq: pad(f.seq, 3),
-        name: f.origName.slice(0, f.origName.length - path.extname(f.origName).length) || f.origName,
+        name: stem,
         ext,
         date: fmtDate(created),
         time: fmtTime(created),
         event,
         orig: f.origName
       };
-      const zipName = dedupe(renderTemplate(req.query.template, ctx));
-      return { filePath: path.join(sessionDir(manifest.id), f.stored), zipName };
+      // Excel 映射优先：序号命中则直接用「名称 + 扩展名」
+      let raw;
+      const excelName = map[String(f.seq)];
+      if (excelName != null && String(excelName).trim() !== '') {
+        raw = sanitizeName(String(excelName).trim()) || ctx.seq;
+        if (ext && !raw.toLowerCase().endsWith(ext)) raw += ext;
+        else if (!ext && !path.extname(raw)) { /* 名称自带扩展名时保留 */ }
+      } else {
+        raw = renderTemplate(template, ctx);
+      }
+      const zipName = dedupe(raw);
+      return { filePath: path.join(sessionDir(manifest.id), f.stored), zipName, viaExcel: excelName != null };
     });
 
     const zipName = `${event}.zip`;
@@ -383,6 +402,54 @@ app.get('/api/download/:id', async (req, res, next) => {
       archive.file(item.filePath, { name: item.zipName, stats: st });
     }
     await archive.finalize();
+  } catch (err) {
+    next(err);
+  }
+}
+
+app.get('/api/download/:id', (req, res, next) => {
+  buildZipDownload(req, res, next, req.query.template, null);
+});
+
+app.post('/api/download/:id', express.json({ limit: '2mb' }), (req, res, next) => {
+  const body = req.body || {};
+  buildZipDownload(req, res, next, body.template != null ? body.template : req.query.template, body.names);
+});
+
+/* ------------------------- 服务信息 / 二维码 ------------------------- */
+
+// 自动检测局域网访问地址（每次请求实时计算，网络切换后刷新页面即更新）
+app.get('/api/info', (req, res) => {
+  const proto = req.protocol === 'http' || req.secure ? 'http' : 'http';
+  const host = req.hostname;
+  // 以「请求进来的那个地址」优先展示，其余网卡地址按序附后
+  const lans = getLanIPv4s();
+  const urls = lans.map(({ name, address }) => ({
+    name,
+    address,
+    phoneUrl: `http://${address}:${PORT}/`,
+    pcUrl: `http://${address}:${PORT}/pc`
+  }));
+  const selfUrl = `http://${host}:${PORT}/`;
+  res.json({
+    port: PORT,
+    selfUrl,
+    phoneUrl: selfUrl,
+    urls,
+    requestedFrom: { address: host, isLocal: host === 'localhost' || host === '127.0.0.1' || lans.some(l => l.address === host) }
+  });
+});
+
+// 二维码（SVG）：?text= 自定义内容，默认手机端首页地址
+app.get('/api/qr', async (req, res, next) => {
+  try {
+    const host = req.hostname;
+    const lans = getLanIPv4s();
+    const text = req.query.text || `http://${host === 'localhost' || host === '127.0.0.1' ? (lans[0] ? lans[0].address : host) : host}:${PORT}/`;
+    const svg = await QRCode.toString(text, { type: 'svg', margin: 1, width: 200 });
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(svg);
   } catch (err) {
     next(err);
   }

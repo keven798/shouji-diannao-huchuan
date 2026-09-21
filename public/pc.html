@@ -96,17 +96,44 @@
   .sess-title { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
   .sess-title .t-name { font-size: 15px; font-weight: 600; }
   .sess-title .t-info { font-size: 12px; color: var(--text-2); }
+
+  /* 手机访问入口（自动检测 + 二维码） */
+  .lan-box { display: flex; gap: 12px; align-items: flex-start; }
+  .lan-qr { width: 128px; height: 128px; flex: none; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+  .lan-urls { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+  .lan-url { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .lan-url .u { font-family: var(--mono); color: var(--primary); text-decoration: none; word-break: break-all; }
+  .lan-url .iface { flex: none; color: var(--text-3); font-size: 11px; min-width: 52px; }
+  .lan-url .cp { flex: none; font-size: 10px; border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; cursor: pointer; color: var(--text-2); }
+  .lan-url .cp:hover { color: var(--primary); border-color: var(--primary); }
+
+  /* Excel 导入命名 */
+  .excel-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .excel-status { font-size: 12px; }
+  .excel-status.ok { color: var(--ok); }
+  .excel-status.err { color: var(--danger); }
+  .excel-status .clear { color: var(--danger); cursor: pointer; margin-left: 6px; text-decoration: underline; }
+  td.new .ex-tag { display: inline-block; margin-left: 6px; padding: 0 4px; height: 14px; line-height: 14px;
+    font-size: 10px; border-radius: 3px; background: #e6f4ea; color: var(--ok); vertical-align: 1px; }
 </style>
 </head>
 <body>
 <header class="topbar">
   <div class="brand">电脑端 · 局域网互传</div>
-  <div class="hint">手机端入口：<a href="/">http://&lt;本机IP&gt;:5210/</a>（启动服务时控制台有二维码）</div>
+  <div class="hint">手机端入口见左下「手机访问入口」，自动检测 · 扫码直达</div>
 </header>
 
 <div class="layout">
   <!-- 左列 -->
   <div>
+    <section class="panel">
+      <div class="panel-head"><h2>手机访问入口（自动检测）</h2></div>
+      <div class="lan-box">
+        <img id="lanQr" class="lan-qr" alt="手机端二维码" title="扫码打开手机传图页">
+        <div class="lan-urls" id="lanUrls"><div class="empty">检测中…</div></div>
+      </div>
+    </section>
+
     <section class="panel">
       <div class="panel-head">
         <h2>会话列表</h2>
@@ -158,6 +185,14 @@
       </div>
       <div class="result" id="tplMsg"></div>
 
+      <div class="panel-head" style="margin-bottom:6px"><h2>Excel 命名模板（序号、名称两列）</h2></div>
+      <div class="excel-row">
+        <label class="btn" for="excelInput" style="flex:none">📄 导入 Excel/CSV</label>
+        <input id="excelInput" type="file" accept=".xlsx,.xls,.csv" hidden>
+        <button class="btn" id="btnTplDownload" type="button">下载模板</button>
+        <span class="excel-status" id="excelStatus">未导入 · 未命中的序号回退上方命名模板</span>
+      </div>
+
       <div class="panel-head" style="margin-bottom:6px"><h2>命名预览</h2><span class="dup-note" id="dupNote">⚠ 模板无区分字段，已自动追加序号去重</span></div>
       <div class="preview-wrap">
         <table class="preview">
@@ -174,6 +209,7 @@
   </div>
 </div>
 
+<script src="/vendor/xlsx.full.min.js"></script>
 <script>
 (function () {
   'use strict';
@@ -181,6 +217,7 @@
   var sessions = [];        // 会话列表缓存
   var current = null;       // 当前选中会话详情 {id,name,direction,createdAt,files[]}
   var DEFAULT_TEMPLATE = '{event}_{seq}{ext}';
+  var excelNameMap = {};    // Excel 导入的 {序号: 名称} 映射
 
   function pad2(n) { return String(n).padStart(2, '0'); }
   function pad3(n) { return String(n).padStart(3, '0'); }
@@ -233,7 +270,17 @@
       var dot = f.origName.lastIndexOf('.');
       var ext = dot >= 0 ? f.origName.slice(dot).toLowerCase() : '';
       var ctx = { seq: pad3(f.seq), name: dot >= 0 ? f.origName.slice(0, dot) : f.origName, ext: ext, date: date, time: time, event: event, orig: f.origName };
-      var name = renderTemplate(tpl, ctx);
+      // Excel 映射优先（与 server.js POST /api/download 逻辑一致）
+      var viaExcel = false;
+      var name;
+      var excelName = excelNameMap[String(f.seq)];
+      if (excelName != null && String(excelName).trim() !== '') {
+        viaExcel = true;
+        name = sanitizeName(String(excelName).trim()) || ctx.seq;
+        if (ext && name.toLowerCase().indexOf(ext, name.length - ext.length) === -1) name += ext;
+      } else {
+        name = renderTemplate(tpl, ctx);
+      }
       if (used[name] !== undefined) {
         hasDup = true;
         var m = name.match(/^(.*?)(\.[^.]+)?$/);
@@ -243,7 +290,7 @@
         name = base + '-' + i + e2;
       }
       used[name] = true;
-      return { orig: f.origName, zipName: name };
+      return { orig: f.origName, zipName: name, viaExcel: viaExcel };
     });
     return { rows: rows, hasDup: hasDup };
   }
@@ -260,7 +307,8 @@
     $('dupNote').style.display = hasNoSeqField() && result.hasDup ? 'inline-block' : 'none';
     body.innerHTML = rows.map(function (r, i) {
       return '<tr><td class="num" style="color:var(--text-3)">' + (i + 1) + '</td>' +
-        '<td class="old">' + esc(r.orig) + '</td><td class="new">' + esc(r.zipName) + '</td></tr>';
+        '<td class="old">' + esc(r.orig) + '</td><td class="new">' + esc(r.zipName) +
+        (r.viaExcel ? '<span class="ex-tag">Excel</span>' : '') + '</td></tr>';
     }).join('');
   }
 
@@ -343,10 +391,133 @@
 
   $('btnRefresh').addEventListener('click', loadSessions);
 
-  $('btnDownloadZip').addEventListener('click', function () {
+  $('btnDownloadZip').addEventListener('click', async function () {
     if (!current) return;
-    var url = '/api/download/' + encodeURIComponent(current.id) + '?template=' + encodeURIComponent($('tplInput').value);
-    location.href = url; // 浏览器自动弹下载，停留当前页
+    var btn = $('btnDownloadZip');
+    btn.disabled = true;
+    try {
+      var url = '/api/download/' + encodeURIComponent(current.id);
+      var resp;
+      if (Object.keys(excelNameMap).length > 0) {
+        // 有 Excel 映射走 POST（名称可能含中文/特殊字符，避免拼 query）
+        resp = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ template: $('tplInput').value, names: excelNameMap })
+        });
+      } else {
+        resp = await fetch(url + '?template=' + encodeURIComponent($('tplInput').value));
+      }
+      if (!resp.ok) {
+        var data = null;
+        try { data = await resp.json(); } catch (_) { /* 非 JSON */ }
+        throw new Error((data && data.error) || ('HTTP ' + resp.status));
+      }
+      var blob = await resp.blob();
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = current.name + '.zip';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(a.href); }, 5000);
+      $('tplMsg').className = 'result ok';
+      $('tplMsg').textContent = '✅ ZIP 已开始下载（' + current.files.length + ' 个文件' +
+        (Object.keys(excelNameMap).length > 0 ? '，Excel 命名 ' + Object.keys(excelNameMap).length + ' 条' : '') + '）';
+    } catch (e) {
+      $('tplMsg').className = 'result err';
+      $('tplMsg').textContent = '❌ 下载失败：' + e.message;
+    }
+    btn.disabled = !current || current.files.length === 0;
+  });
+
+  /* ============ Excel 命名模板（序号、名称两列） ============ */
+
+  function setExcelStatus(cls, text) {
+    var el = $('excelStatus');
+    el.className = 'excel-status ' + (cls || '');
+    el.innerHTML = text;
+  }
+
+  function clearExcelMap() {
+    excelNameMap = {};
+    $('excelInput').value = '';
+    setExcelStatus('', '未导入 · 未命中的序号回退上方命名模板');
+    renderPreview();
+  }
+
+  // 解析 Excel/CSV：第一列序号、第二列名称；首行为表头（序号/名称等非纯数字）时自动跳过
+  function parseNameSheet(rows) {
+    var map = {};
+    var skipped = 0, bad = 0;
+    rows.forEach(function (row, idx) {
+      if (!row || row.length < 2) { if (row && (row[0] != null || row[1] != null)) bad += 1; return; }
+      var seqCell = row[0], nameCell = row[1];
+      if (seqCell == null || String(seqCell).trim() === '') { bad += 1; return; }
+      var n = parseInt(String(seqCell).trim(), 10);
+      if (isNaN(n)) { // 表头行（如「序号/名称」）
+        if (idx === 0 && /[\u4e00-\u9fa5a-zA-Z]/.test(String(seqCell))) skipped += 1;
+        else bad += 1;
+        return;
+      }
+      var name = String(nameCell == null ? '' : nameCell).trim();
+      if (name !== '') map[n] = name;
+    });
+    return { map: map, skipped: skipped, bad: bad };
+  }
+
+  $('excelInput').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    if (typeof XLSX === 'undefined') {
+      setExcelStatus('err', '❌ Excel 解析库未加载（/vendor/xlsx.full.min.js 缺失）');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      try {
+        var wb = XLSX.read(ev.target.result, { type: 'array' });
+        var ws = wb.Sheets[wb.SheetNames[0]];
+        var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+        var parsed = parseNameSheet(rows);
+        var count = Object.keys(parsed.map).length;
+        if (count === 0) {
+          setExcelStatus('err', '❌ 未解析到有效行：需两列，第 1 列为序号（数字）、第 2 列为名称');
+          excelNameMap = {};
+        } else {
+          excelNameMap = parsed.map;
+          setExcelStatus('ok', '✅ 已导入 ' + count + ' 条命名' +
+            (parsed.skipped ? '，跳过表头 ' + parsed.skipped + ' 行' : '') +
+            (parsed.bad ? '，无效 ' + parsed.bad + ' 行' : '') +
+            '<span class="clear" id="excelClear">清除</span>');
+          var c = document.getElementById('excelClear');
+          if (c) c.addEventListener('click', clearExcelMap);
+        }
+        renderPreview();
+      } catch (err) {
+        setExcelStatus('err', '❌ 解析失败：' + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  // 下载模板：按当前会话生成（序号=上传序号，名称=原文件名去扩展名），无会话给空模板
+  $('btnTplDownload').addEventListener('click', function () {
+    if (typeof XLSX === 'undefined') { alert('Excel 解析库未加载'); return; }
+    var aoa = [['序号', '名称']];
+    if (current && current.files.length > 0) {
+      current.files.forEach(function (f) {
+        var dot = f.origName.lastIndexOf('.');
+        aoa.push([f.seq, dot >= 0 ? f.origName.slice(0, dot) : f.origName]);
+      });
+    } else {
+      aoa.push([1, '示例名称一'], [2, '示例名称二']);
+    }
+    var ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws['!cols'] = [{ wch: 8 }, { wch: 32 }];
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '命名模板');
+    XLSX.writeFile(wb, (current ? current.name : '命名模板') + '.xlsx');
   });
 
   /* ============ 电脑 → 手机 上传 ============ */
@@ -409,8 +580,41 @@
     xhr.send(fd);
   });
 
+  /* ============ 手机访问入口（自动检测 + 二维码） ============ */
+
+  async function loadLanInfo() {
+    try {
+      var res = await fetch('/api/info');
+      var info = await res.json();
+      var box = $('lanUrls');
+      var urls = info.urls && info.urls.length > 0 ? info.urls : [];
+      if (urls.length === 0) {
+        box.innerHTML = '<div class="empty">未检测到局域网网卡，请确认已连接 Wi-Fi/网线后刷新</div>';
+        return;
+      }
+      box.innerHTML = urls.map(function (u, i) {
+        return '<div class="lan-url"><span class="iface">' + esc(u.name.length > 8 ? u.name.slice(0, 8) : u.name) + '</span>' +
+          '<a class="u" href="' + esc(u.phoneUrl) + '" target="_blank">' + esc(u.phoneUrl) + '</a>' +
+          '<span class="cp" data-url="' + esc(u.phoneUrl) + '">复制</span>' +
+          (i === 0 ? '<span style="font-size:10px;color:var(--ok)">首选</span>' : '') + '</div>';
+      }).join('') + '<div style="font-size:11px;color:var(--text-3);margin-top:2px">手机连同一 Wi-Fi 访问上方地址，或扫左侧二维码直达</div>';
+      Array.prototype.forEach.call(box.querySelectorAll('.cp'), function (n) {
+        n.addEventListener('click', function () {
+          navigator.clipboard.writeText(n.getAttribute('data-url')).then(function () {
+            n.textContent = '已复制';
+            setTimeout(function () { n.textContent = '复制'; }, 1500);
+          });
+        });
+      });
+      $('lanQr').src = '/api/qr?text=' + encodeURIComponent(urls[0].phoneUrl) + '&t=' + Date.now();
+    } catch (e) {
+      $('lanUrls').innerHTML = '<div class="empty">地址检测失败：' + esc(e.message) + '</div>';
+    }
+  }
+
   /* 初始化 */
   loadSessions();
+  loadLanInfo();
 })();
 </script>
 </body>
