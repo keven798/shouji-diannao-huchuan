@@ -343,27 +343,38 @@
         box.innerHTML = '<div class="empty">暂无电脑传来的文件，请在电脑端 /pc 页面上传</div>';
         return;
       }
+      // /api/sessions 是摘要（不含 files），需逐个拉详情
+      var details = await Promise.all(pcList.map(function (s) {
+        return fetch('/api/sessions/' + encodeURIComponent(s.id))
+          .then(function (r) { return r.json(); })
+          .catch(function () { return null; });
+      }));
       box.innerHTML = '';
-      pcList.forEach(function (s) {
+      pcList.forEach(function (s, i) {
+        var files = (details[i] && details[i].files) || [];
         var sess = document.createElement('div');
         sess.className = 'pc-sess';
         var head = document.createElement('div');
         head.className = 'pc-sess-head';
         head.innerHTML = '<div><div class="name">' + esc(s.name) + '</div>' +
-          '<div class="info num">' + fmtTime(s.createdAt) + ' · ' + s.fileCount + ' 个文件 · ' + fmtSize(s.totalSize) + '</div></div>' +
+          '<div class="info num">' + fmtTime(s.createdAt) + ' · ' + files.length + ' 个文件 · ' + fmtSize(s.totalSize) + '</div></div>' +
           '<a class="btn btn-sm btn-primary" href="/api/download/' + encodeURIComponent(s.id) + '">打包 ZIP</a>';
         sess.appendChild(head);
         var filesBox = document.createElement('div');
         filesBox.className = 'pc-files';
-        s.files.forEach(function (f) {
-          var row = document.createElement('div');
-          row.className = 'pc-file';
-          row.innerHTML = '<span class="num" style="color:var(--text-3)">' + f.seq + '</span>' +
-            '<span class="fname">' + esc(f.origName) + '</span>' +
-            '<span class="fsize">' + fmtSize(f.size) + '</span>' +
-            '<a href="/api/file/' + encodeURIComponent(s.id) + '/' + f.seq + '">下载</a>';
-          filesBox.appendChild(row);
-        });
+        if (files.length === 0) {
+          filesBox.innerHTML = '<div class="empty">该批次没有文件</div>';
+        } else {
+          files.forEach(function (f) {
+            var row = document.createElement('div');
+            row.className = 'pc-file';
+            row.innerHTML = '<span class="num" style="color:var(--text-3)">' + f.seq + '</span>' +
+              '<span class="fname">' + esc(f.origName) + '</span>' +
+              '<span class="fsize">' + fmtSize(f.size) + '</span>' +
+              '<a href="/api/file/' + encodeURIComponent(s.id) + '/' + f.seq + '">下载</a>';
+            filesBox.appendChild(row);
+          });
+        }
         sess.appendChild(filesBox);
         box.appendChild(sess);
       });
